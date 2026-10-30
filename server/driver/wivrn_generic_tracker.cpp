@@ -31,12 +31,30 @@
 #include "xrt/xrt_defines.h"
 #include "xrt/xrt_results.h"
 
+#include <cmath>
 #include <format>
 
 using namespace xrt::auxiliary::math;
 
 namespace wivrn
 {
+
+// Body joints are packed on 10 bits per component, so w decodes to exactly 0
+// for rotations within about 0.08° of 180°. This is within the expected
+// quantization error, but OpenVR applications get a matrix and may convert it
+// back to a quaternion by taking the signs of x, y, z from its antisymmetric
+// part (as SteamVR_Utils does). That part vanishes when w is 0, which loses the
+// signs and gives a completely wrong rotation. Moving w away from 0 keeps them,
+// for a rotation change of about 0.11°.
+static void avoid_zero_w(xrt_quat & q)
+{
+	// The second condition skips poses that are not rotations, like XRT_SPACE_RELATION_ZERO
+	if (std::abs(q.w) < 1e-6f and q.x * q.x + q.y * q.y + q.z * q.z > 0.25f)
+	{
+		q.w = 1e-3f;
+		math_quat_normalize(&q);
+	}
+}
 
 xrt_space_relation tracker_pose_list::interpolate(const xrt_space_relation & a, const xrt_space_relation & b, float t)
 {
@@ -129,6 +147,7 @@ xrt_result_t wivrn_generic_tracker::get_tracked_pose(xrt_input_name name, int64_
 	if (name == XRT_INPUT_GENERIC_TRACKER_POSE)
 	{
 		std::tie(production_timestamp, *res) = poses.get_at(at_timestamp_ns);
+		avoid_zero_w(res->pose.orientation);
 
 		cnx.add_tracking_request(device_id::BODY, at_timestamp_ns, production_timestamp);
 		return XRT_SUCCESS;
